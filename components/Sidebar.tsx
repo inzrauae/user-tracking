@@ -47,7 +47,11 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onNavigate, o
         {navItems.map((item) => (
           <button
             key={item.id}
-            onClick={() => onNavigate(item.id)}
+            onClick={(e) => {
+              e.preventDefault();
+              onNavigate(item.id);
+            }}
+            type="button"
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
               activeTab === item.id 
                 ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' 
@@ -73,7 +77,11 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onNavigate, o
           </div>
         </div>
         <button 
-          onClick={onLogout}
+          onClick={(e) => {
+            e.preventDefault();
+            onLogout();
+          }}
+          type="button"
           className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-lg transition-colors"
         >
           <LogOut className="w-4 h-4" />

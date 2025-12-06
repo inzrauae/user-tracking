@@ -45,13 +45,13 @@ const TimeTracker: React.FC<TimeTrackerProps> = ({
           <p className="text-sm text-red-600 mb-4">No activity detected for a while. Timer is paused.</p>
           <div className="flex items-center gap-3">
             <button 
-              onClick={(e) => { e.stopPropagation(); onResume(); }} 
+              onClick={onResume} 
               className="bg-white text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-bold hover:bg-red-50 transition-colors shadow-sm"
             >
               I'm Back
             </button>
             <button 
-              onClick={(e) => { e.stopPropagation(); onStop(); }} 
+              onClick={onStop} 
               className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-red-700 transition-colors shadow-sm"
             >
               Stop Timer

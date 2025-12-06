@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import axios from 'axios';
 import { User, UserRole, Task, TimeEntry, DashboardStats, Screenshot } from './types';
 import Sidebar from './components/Sidebar';
 import TimeTracker from './components/TimeTracker';
@@ -114,6 +115,21 @@ const App: React.FC = () => {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
   
+  // Task Modal State
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [newTaskData, setNewTaskData] = useState({
+    title: '',
+    description: '',
+    assigneeId: '',
+    priority: 'MEDIUM',
+    dueDate: ''
+  });
+  const [tasks, setTasks] = useState<Task[]>([]);
+  
+  // API Configuration
+  const API_URL = 'http://localhost:5000/api';
+  const token = localStorage.getItem('token');
+  
   // Anti-Fraud State
   const lastActivityRef = useRef(Date.now());
   const sessionEventsRef = useRef(0);
@@ -140,7 +156,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser || !isTracking) return;
 
-    const handleActivity = () => {
+    const handleActivity = (e: Event) => {
       // Update refs immediately without triggering re-renders
       lastActivityRef.current = Date.now();
       sessionEventsRef.current += 1;
@@ -150,10 +166,10 @@ const App: React.FC = () => {
       // This prevents the "disappearing button" bug.
     };
 
-    window.addEventListener('mousemove', handleActivity);
-    window.addEventListener('keydown', handleActivity);
-    window.addEventListener('click', handleActivity);
-    window.addEventListener('scroll', handleActivity);
+    window.addEventListener('mousemove', handleActivity, { passive: true });
+    window.addEventListener('keydown', handleActivity, { passive: true });
+    window.addEventListener('click', handleActivity, { passive: true });
+    window.addEventListener('scroll', handleActivity, { passive: true });
 
     return () => {
       window.removeEventListener('mousemove', handleActivity);
@@ -225,10 +241,25 @@ const App: React.FC = () => {
     }
   }, [elapsedSeconds, isTracking]);
 
-  const handleLogin = (role: UserRole) => {
-    const user = MOCK_USERS.find(u => u.role === role) || MOCK_USERS[0];
-    setCurrentUser(user);
-    setActiveTab('dashboard');
+  const handleLogin = async (role: UserRole) => {
+    try {
+      // Use demo login endpoint
+      const response = await axios.post(`${API_URL}/auth/demo-login`, { role });
+      
+      if (response.data.success) {
+        const { user, token } = response.data;
+        setCurrentUser(user);
+        setActiveTab('dashboard');
+        localStorage.setItem('token', token);
+      }
+    } catch (error: any) {
+      console.error('Login error:', error);
+      // Fallback to mock user if API fails
+      const user = MOCK_USERS.find(u => u.role === role) || MOCK_USERS[0];
+      setCurrentUser(user);
+      setActiveTab('dashboard');
+      localStorage.setItem('token', 'demo-fallback-token');
+    }
   };
 
   const handleLogout = () => {
@@ -237,12 +268,78 @@ const App: React.FC = () => {
     setElapsedSeconds(0);
     setScreenshots([]);
     setIsIdle(false);
+    localStorage.removeItem('token');
   };
 
   const handleResume = () => {
     setIsIdle(false);
     lastActivityRef.current = Date.now();
   };
+
+  const handleCreateTask = async () => {
+    if (!newTaskData.title || !newTaskData.assigneeId || !newTaskData.dueDate) {
+      alert('Please fill in all required fields');
+      return;
+    }
+
+    try {
+      const response = await axios.post(
+        `${API_URL}/tasks`,
+        {
+          ...newTaskData,
+          status: 'TODO'
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+
+      if (response.data.success) {
+        // Add the new task to the local state
+        setTasks(prev => [response.data.task, ...prev]);
+        
+        // Close modal and reset form
+        setIsTaskModalOpen(false);
+        setNewTaskData({
+          title: '',
+          description: '',
+          assigneeId: '',
+          priority: 'MEDIUM',
+          dueDate: ''
+        });
+        
+        alert('Task created successfully!');
+      }
+    } catch (error: any) {
+      console.error('Error creating task:', error);
+      alert(error.response?.data?.message || 'Failed to create task');
+    }
+  };
+
+  // Fetch tasks when user logs in or tab changes to tasks
+  useEffect(() => {
+    if (currentUser && activeTab === 'tasks' && token) {
+      const fetchTasks = async () => {
+        try {
+          const response = await axios.get(`${API_URL}/tasks`, {
+            headers: {
+              Authorization: `Bearer ${token}`
+            }
+          });
+          if (response.data.success) {
+            setTasks(response.data.tasks);
+          }
+        } catch (error) {
+          console.error('Error fetching tasks:', error);
+          // Fallback to mock data if API fails
+          setTasks(MOCK_TASKS);
+        }
+      };
+      fetchTasks();
+    }
+  }, [currentUser, activeTab, token]);
 
   if (isMobile) {
     return <MobileBlockScreen />;
@@ -383,7 +480,10 @@ const App: React.FC = () => {
               </button>
             ))}
           </div>
-          <button className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2">
+          <button 
+            onClick={() => setIsTaskModalOpen(true)}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2"
+          >
             <span>+ New Task</span>
           </button>
         </div>
@@ -402,7 +502,7 @@ const App: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {MOCK_TASKS.map((task) => (
+                {(tasks.length > 0 ? tasks : MOCK_TASKS).map((task) => (
                   <tr key={task.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-4">
                       <p className="font-medium text-slate-900">{task.title}</p>
@@ -446,6 +546,120 @@ const App: React.FC = () => {
             </table>
           </div>
         </div>
+
+        {/* Task Creation Modal */}
+        {isTaskModalOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-slate-200">
+                <h2 className="text-2xl font-bold text-slate-900">Create New Task</h2>
+                <p className="text-sm text-slate-500 mt-1">Fill in the details to create a new task</p>
+              </div>
+
+              <div className="p-6 space-y-4">
+                {/* Title */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Task Title <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newTaskData.title}
+                    onChange={(e) => setNewTaskData({...newTaskData, title: e.target.value})}
+                    placeholder="Enter task title"
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  />
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Description
+                  </label>
+                  <textarea
+                    value={newTaskData.description}
+                    onChange={(e) => setNewTaskData({...newTaskData, description: e.target.value})}
+                    placeholder="Enter task description"
+                    rows={4}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none"
+                  />
+                </div>
+
+                {/* Assignee */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Assign To <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={newTaskData.assigneeId}
+                    onChange={(e) => setNewTaskData({...newTaskData, assigneeId: e.target.value})}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  >
+                    <option value="">Select an employee</option>
+                    {MOCK_USERS.filter(u => u.role === UserRole.EMPLOYEE).map(user => (
+                      <option key={user.id} value={user.id}>{user.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Priority and Due Date */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Priority
+                    </label>
+                    <select
+                      value={newTaskData.priority}
+                      onChange={(e) => setNewTaskData({...newTaskData, priority: e.target.value})}
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                    >
+                      <option value="LOW">Low</option>
+                      <option value="MEDIUM">Medium</option>
+                      <option value="HIGH">High</option>
+                      <option value="URGENT">Urgent</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Due Date <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={newTaskData.dueDate}
+                      onChange={(e) => setNewTaskData({...newTaskData, dueDate: e.target.value})}
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-slate-200 flex gap-3 justify-end">
+                <button
+                  onClick={() => {
+                    setIsTaskModalOpen(false);
+                    setNewTaskData({
+                      title: '',
+                      description: '',
+                      assigneeId: '',
+                      priority: 'MEDIUM',
+                      dueDate: ''
+                    });
+                  }}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateTask}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors"
+                >
+                  Create Task
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
