@@ -1,8 +1,10 @@
 const express = require('express');
+const http = require('http');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const { Server } = require('socket.io');
 const { testConnection, sequelize } = require('./config/database');
-const { syncDatabase } = require('./models');
+const { syncDatabase, Message, User } = require('./models');
 const seedUsers = require('./scripts/seedUsers');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
@@ -10,10 +12,18 @@ const taskRoutes = require('./routes/tasks');
 const timeEntryRoutes = require('./routes/timeEntries');
 const screenshotRoutes = require('./routes/screenshots');
 const statsRoutes = require('./routes/stats');
+const messageRoutes = require('./routes/messages');
 
 dotenv.config();
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    methods: ['GET', 'POST']
+  }
+});
 const PORT = process.env.PORT || 5000;
 
 // Middleware
@@ -42,6 +52,66 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/time-entries', timeEntryRoutes);
 app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/stats', statsRoutes);
+app.use('/api/messages', messageRoutes);
+
+// Socket.IO for real-time chat
+const onlineUsers = new Map();
+
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+
+  socket.on('user:online', async (userId) => {
+    onlineUsers.set(userId, socket.id);
+    socket.userId = userId;
+    
+    // Broadcast updated online users list
+    const onlineUserIds = Array.from(onlineUsers.keys());
+    io.emit('users:online', onlineUserIds);
+  });
+
+  socket.on('message:send', async (data) => {
+    try {
+      const { userId, message } = data;
+      
+      const newMessage = await Message.create({
+        userId,
+        message,
+        timestamp: new Date()
+      });
+
+      const messageWithUser = await Message.findByPk(newMessage.id, {
+        include: [{
+          model: User,
+          as: 'user',
+          attributes: ['id', 'name', 'avatar', 'role']
+        }]
+      });
+
+      // Broadcast to all connected clients
+      io.emit('message:new', messageWithUser);
+    } catch (error) {
+      console.error('Error sending message:', error);
+      socket.emit('message:error', { error: error.message });
+    }
+  });
+
+  socket.on('typing:start', (userId) => {
+    socket.broadcast.emit('user:typing', userId);
+  });
+
+  socket.on('typing:stop', (userId) => {
+    socket.broadcast.emit('user:stop-typing', userId);
+  });
+
+  socket.on('disconnect', () => {
+    if (socket.userId) {
+      onlineUsers.delete(socket.userId);
+      const onlineUserIds = Array.from(onlineUsers.keys());
+      io.emit('users:online', onlineUserIds);
+    }
+    console.log('User disconnected:', socket.id);
+  });
+});
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -58,9 +128,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 API available at http://localhost:${PORT}/api`);
+  console.log(`💬 Socket.IO ready for real-time chat`);
 });
 
 module.exports = app;

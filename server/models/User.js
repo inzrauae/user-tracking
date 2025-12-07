@@ -35,6 +35,30 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING(255),
     defaultValue: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default'
   },
+  mobile: {
+    type: DataTypes.STRING(20),
+    allowNull: true
+  },
+  bankAccountNumber: {
+    type: DataTypes.STRING(50),
+    allowNull: true
+  },
+  bankName: {
+    type: DataTypes.STRING(100),
+    allowNull: true
+  },
+  ifscCode: {
+    type: DataTypes.STRING(20),
+    allowNull: true
+  },
+  resetPasswordToken: {
+    type: DataTypes.STRING(255),
+    allowNull: true
+  },
+  resetPasswordExpires: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
   isOnline: {
     type: DataTypes.BOOLEAN,
     defaultValue: false

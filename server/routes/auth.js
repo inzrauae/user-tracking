@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { User } = require('../models');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
@@ -9,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-producti
 // Register
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, role, department } = req.body;
+    const { name, email, password, role, department, mobile, bankAccountNumber, bankName, ifscCode } = req.body;
 
     // Check if user exists
     const existingUser = await User.findOne({ where: { email } });
@@ -26,7 +27,11 @@ router.post('/register', async (req, res) => {
       email,
       password: hashedPassword,
       role: role || 'EMPLOYEE',
-      department: department || 'Engineering'
+      department: department || 'Engineering',
+      mobile: mobile || null,
+      bankAccountNumber: bankAccountNumber || null,
+      bankName: bankName || null,
+      ifscCode: ifscCode || null
     });
 
     // Generate token
@@ -42,7 +47,8 @@ router.post('/register', async (req, res) => {
         email: user.email,
         role: user.role,
         department: user.department,
-        avatar: user.avatar
+        avatar: user.avatar,
+        mobile: user.mobile
       }
     });
   } catch (error) {
@@ -296,6 +302,116 @@ router.post('/logout', async (req, res) => {
     res.json({ success: true, message: 'Logout successful' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Logout failed', error: error.message });
+  }
+});
+
+// Request Password Reset
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const user = await User.findOne({ where: { email } });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found with this email' });
+    }
+
+    // Generate reset token (6-digit code for simplicity)
+    const resetToken = Math.floor(100000 + Math.random() * 900000).toString();
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    
+    // Save token and expiry (1 hour)
+    await user.update({
+      resetPasswordToken: resetTokenHash,
+      resetPasswordExpires: new Date(Date.now() + 3600000)
+    });
+
+    // In production, send this via email
+    // For now, return it in response (REMOVE IN PRODUCTION)
+    res.json({
+      success: true,
+      message: 'Password reset code generated. In production, this would be sent to your email.',
+      resetCode: resetToken, // REMOVE THIS IN PRODUCTION
+      email: user.email
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to process request', error: error.message });
+  }
+});
+
+// Verify Reset Code and Reset Password
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { email, resetCode, newPassword } = req.body;
+
+    if (!email || !resetCode || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Email, reset code, and new password are required' });
+    }
+
+    // Hash the provided reset code
+    const resetTokenHash = crypto.createHash('sha256').update(resetCode).digest('hex');
+
+    // Find user with valid token
+    const user = await User.findOne({
+      where: {
+        email: email,
+        resetPasswordToken: resetTokenHash,
+        resetPasswordExpires: { [require('sequelize').Op.gt]: new Date() }
+      }
+    });
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired reset code' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password and clear reset token
+    await user.update({
+      password: hashedPassword,
+      resetPasswordToken: null,
+      resetPasswordExpires: null
+    });
+
+    res.json({
+      success: true,
+      message: 'Password reset successful. You can now login with your new password.'
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to reset password', error: error.message });
+  }
+});
+
+// Change Password (for logged-in users)
+router.post('/change-password', async (req, res) => {
+  try {
+    const { userId, currentPassword, newPassword } = req.body;
+
+    if (!userId || !currentPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Verify current password
+    const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+    if (!isValidPassword) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    }
+
+    // Hash and save new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await user.update({ password: hashedPassword });
+
+    res.json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to change password', error: error.message });
   }
 });
 

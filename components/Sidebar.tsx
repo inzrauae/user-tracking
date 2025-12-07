@@ -33,13 +33,9 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onNavigate, o
 
   return (
     <div className={`${isOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 fixed md:static inset-y-0 left-0 z-30 w-64 bg-slate-900 text-white transition-transform duration-300 ease-in-out flex flex-col h-full`}>
-      <div className="p-6 border-b border-slate-800 flex items-center gap-3">
-        <div className="bg-indigo-500 p-2 rounded-lg">
-          <Briefcase className="w-6 h-6 text-white" />
-        </div>
-        <div>
-          <h1 className="font-bold text-lg leading-none">RemoteSync</h1>
-          <span className="text-xs text-slate-400">Team Manager</span>
+      <div className="p-6 border-b border-slate-800">
+        <div className="w-full">
+          <img src="/logo-1 (1).png" alt="RemoteSync Logo" className="w-full h-auto" />
         </div>
       </div>
 
@@ -87,6 +83,9 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onNavigate, o
           <LogOut className="w-4 h-4" />
           Sign Out
         </button>
+        <div className="mt-4 pt-4 border-t border-slate-800 text-center">
+          <p className="text-xs text-slate-500">RemoteSync Team Manager</p>
+        </div>
       </div>
     </div>
   );
