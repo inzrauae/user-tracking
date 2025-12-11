@@ -13,6 +13,12 @@ const timeEntryRoutes = require('./routes/timeEntries');
 const screenshotRoutes = require('./routes/screenshots');
 const statsRoutes = require('./routes/stats');
 const messageRoutes = require('./routes/messages');
+const projectRoutes = require('./routes/projects');
+const projectCostsRoutes = require('./routes/projectCosts');
+const projectPaymentsRoutes = require('./routes/projectPayments');
+const projectTimelinesRoutes = require('./routes/projectTimelines');
+const notificationRoutes = require('./routes/notifications');
+const leaveRoutes = require('./routes/leaves');
 
 dotenv.config();
 
@@ -53,6 +59,12 @@ app.use('/api/time-entries', timeEntryRoutes);
 app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/projects', projectRoutes);
+app.use('/api/project-costs', projectCostsRoutes);
+app.use('/api/project-payments', projectPaymentsRoutes);
+app.use('/api/project-timelines', projectTimelinesRoutes);
+app.use('/api/leaves', leaveRoutes);
 
 // Socket.IO for real-time chat
 const onlineUsers = new Map();

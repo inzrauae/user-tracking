@@ -4,6 +4,11 @@ import { User, UserRole, Task, TimeEntry, DashboardStats, Screenshot } from './t
 import Sidebar from './components/Sidebar';
 import TimeTracker from './components/TimeTracker';
 import Chat from './components/Chat';
+import { NotificationCenter } from './components/NotificationCenter';
+import { SessionManager } from './components/SessionManager';
+import { LeaveCalendar } from './components/LeaveCalendar';
+import { LeaveRequestModal } from './components/LeaveRequestModal';
+import { LeaveRequestsList } from './components/LeaveRequestsList';
 import { MOCK_USERS, MOCK_TASKS } from './services/mockData';
 import { 
   BarChart, 
@@ -50,7 +55,7 @@ const MobileBlockScreen = () => (
 );
 
 // --- Login Component ---
-const LoginScreen = ({ onLogin }: { onLogin: (email: string, password: string) => Promise<{ success: boolean; error?: string }> }) => {
+const LoginScreen = ({ onLogin, apiUrl }: { onLogin: (email: string, password: string) => Promise<{ success: boolean; error?: string }>; apiUrl: string }) => {
   const [loginMode, setLoginMode] = useState<'select' | 'admin' | 'employee' | 'forgot'>('select');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -82,7 +87,7 @@ const LoginScreen = ({ onLogin }: { onLogin: (email: string, password: string) =
 
     if (resetStep === 'email') {
       try {
-        const response = await axios.post(`${API_URL}/auth/forgot-password`, { email });
+        const response = await axios.post(`${apiUrl}/auth/forgot-password`, { email });
         if (response.data.success) {
           setSuccessMessage(`Reset code sent! Code: ${response.data.resetCode}`);
           setResetStep('code');
@@ -103,7 +108,7 @@ const LoginScreen = ({ onLogin }: { onLogin: (email: string, password: string) =
       }
 
       try {
-        const response = await axios.post(`${API_URL}/auth/reset-password`, {
+        const response = await axios.post(`${apiUrl}/auth/reset-password`, {
           email,
           resetCode,
           newPassword
@@ -434,6 +439,9 @@ const UserRoleIcon = ({ role }: { role: UserRole }) => {
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [sessionInfo, setSessionInfo] = useState<any>(null);
+  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
+  const [sessionManagerOpen, setSessionManagerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -457,6 +465,17 @@ const App: React.FC = () => {
   
   // Employee Modal State
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
+  const [selectedEmployeeForView, setSelectedEmployeeForView] = useState<User | null>(null);
+  const [isEmployeeViewModalOpen, setIsEmployeeViewModalOpen] = useState(false);
+  const [selectedEmployeeForSettings, setSelectedEmployeeForSettings] = useState<User | null>(null);
+  const [isEmployeeSettingsModalOpen, setIsEmployeeSettingsModalOpen] = useState(false);
+  const [editingEmployeeData, setEditingEmployeeData] = useState({
+    name: '',
+    email: '',
+    mobile: '',
+    department: '',
+    role: ''
+  });
   const [newEmployeeData, setNewEmployeeData] = useState({
     name: '',
     email: '',
@@ -468,6 +487,25 @@ const App: React.FC = () => {
     bankName: '',
     ifscCode: ''
   });
+
+  // Project Management State
+  const [projects, setProjects] = useState<any[]>([]);
+  const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<any>(null);
+  const [newProjectData, setNewProjectData] = useState({
+    name: '',
+    description: '',
+    clientName: '',
+    budget: '',
+    startDate: '',
+    endDate: '',
+    teamLeadId: '',
+    priority: 'MEDIUM'
+  });
+
+  // Leave Management State
+  const [isLeaveRequestModalOpen, setIsLeaveRequestModalOpen] = useState(false);
+  const [leaveRefreshTrigger, setLeaveRefreshTrigger] = useState(0);
   
   // API Configuration
   const API_URL = 'http://localhost:5000/api';
@@ -589,10 +627,12 @@ const App: React.FC = () => {
       const response = await axios.post(`${API_URL}/auth/login`, { email, password });
       
       if (response.data.success) {
-        const { user, token } = response.data;
+        const { user, token, sessionId, deviceInfo } = response.data;
         setCurrentUser(user);
+        setSessionInfo({ sessionId, deviceInfo });
         setActiveTab('dashboard');
         localStorage.setItem('token', token);
+        localStorage.setItem('sessionInfo', JSON.stringify({ sessionId, deviceInfo }));
         return { success: true };
       } else {
         return { success: false, error: response.data.message || response.data.error || 'Login failed' };
@@ -600,17 +640,25 @@ const App: React.FC = () => {
     } catch (error: any) {
       console.error('Login error:', error);
       const errorMessage = error.response?.data?.message || error.response?.data?.error || 'Login failed. Please check your credentials.';
+      
+      // Handle mobile restriction error
+      if (error.response?.status === 403 && error.response?.data?.reason === 'MOBILE_DEVICE_RESTRICTED') {
+        return { success: false, error: 'Mobile login is not allowed for employees. Please use a desktop device.' };
+      }
+      
       return { success: false, error: errorMessage };
     }
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
+    setSessionInfo(null);
     setIsTracking(false);
     setElapsedSeconds(0);
     setScreenshots([]);
     setIsIdle(false);
     localStorage.removeItem('token');
+    localStorage.removeItem('sessionInfo');
   };
 
   const handleResume = () => {
@@ -714,6 +762,48 @@ const App: React.FC = () => {
     }
   };
 
+  const handleCreateProject = async () => {
+    if (!newProjectData.name || !newProjectData.budget || !newProjectData.startDate || !newProjectData.endDate) {
+      alert('Please fill in all required fields');
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.post(
+        `${API_URL}/projects`,
+        {
+          ...newProjectData,
+          budget: parseFloat(newProjectData.budget)
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+
+      if (response.data.success) {
+        setProjects(prev => [response.data.project, ...prev]);
+        setIsProjectModalOpen(false);
+        setNewProjectData({
+          name: '',
+          description: '',
+          clientName: '',
+          budget: '',
+          startDate: '',
+          endDate: '',
+          teamLeadId: '',
+          priority: 'MEDIUM'
+        });
+        alert('Project created successfully!');
+      }
+    } catch (error: any) {
+      console.error('Error creating project:', error);
+      alert(error.response?.data?.message || 'Failed to create project');
+    }
+  };
+
   // Fetch tasks when user logs in or tab changes to tasks
   useEffect(() => {
     if (currentUser && activeTab === 'tasks') {
@@ -762,12 +852,35 @@ const App: React.FC = () => {
     }
   }, [currentUser]);
 
+  // Fetch projects when logged in as admin
+  useEffect(() => {
+    if (currentUser && currentUser.role === UserRole.ADMIN) {
+      const fetchProjects = async () => {
+        try {
+          const token = localStorage.getItem('token');
+          const response = await axios.get(`${API_URL}/projects`, {
+            headers: {
+              Authorization: `Bearer ${token}`
+            }
+          });
+          if (response.data.success) {
+            setProjects(response.data.projects);
+          }
+        } catch (error) {
+          console.error('Error fetching projects:', error);
+          setProjects([]);
+        }
+      };
+      fetchProjects();
+    }
+  }, [currentUser]);
+
   if (isMobile) {
     return <MobileBlockScreen />;
   }
 
   if (!currentUser) {
-    return <LoginScreen onLogin={handleLogin} />;
+    return <LoginScreen onLogin={handleLogin} apiUrl={API_URL} />;
   }
 
   // --- Dashboard Component (Updated with Proof of Work) ---
@@ -838,7 +951,7 @@ const App: React.FC = () => {
                   Proof of Work 
                   <span className="text-xs font-normal text-slate-400 ml-2">(Simulated)</span>
                 </h3>
-                <button className="text-xs text-indigo-600 font-medium hover:underline">View All</button>
+                <button onClick={() => alert('View all screenshots')} className="text-xs text-indigo-600 font-medium hover:underline">View All</button>
               </div>
               
               {screenshots.length === 0 ? (
@@ -896,7 +1009,7 @@ const App: React.FC = () => {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="flex gap-2 bg-white p-1 rounded-lg border border-slate-200 shadow-sm">
             {['All', 'To Do', 'In Progress', 'Completed'].map((filter) => (
-              <button key={filter} className="px-4 py-1.5 text-sm font-medium rounded-md hover:bg-slate-50 text-slate-600 focus:bg-indigo-50 focus:text-indigo-600 transition-colors">
+              <button key={filter} onClick={() => console.log(`Filter by: ${filter}`)} className="px-4 py-1.5 text-sm font-medium rounded-md hover:bg-slate-50 text-slate-600 focus:bg-indigo-50 focus:text-indigo-600 transition-colors">
                 {filter}
               </button>
             ))}
@@ -957,7 +1070,7 @@ const App: React.FC = () => {
                     </td>
                     <td className="px-6 py-4 font-mono text-xs">{task.dueDate}</td>
                     <td className="px-6 py-4 text-right">
-                      <button className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                      <button onClick={() => alert(`Options for ${task.title}`)} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
                         <MoreVertical className="w-4 h-4 text-slate-400" />
                       </button>
                     </td>
@@ -1085,6 +1198,177 @@ const App: React.FC = () => {
     );
   };
 
+  const Projects = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-bold text-slate-900">Projects</h2>
+          <button 
+            onClick={() => setIsProjectModalOpen(true)}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
+          >
+            + New Project
+          </button>
+        </div>
+
+        {/* Projects Summary Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+            <p className="text-sm font-medium text-slate-500 mb-2">Total Projects</p>
+            <p className="text-3xl font-bold text-slate-900">{projects.length}</p>
+            <p className="text-xs text-green-600 mt-2">All projects</p>
+          </div>
+          <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+            <p className="text-sm font-medium text-slate-500 mb-2">Total Budget</p>
+            <p className="text-3xl font-bold text-slate-900">LKR {(projects.reduce((sum, p) => sum + parseFloat(p.budget || 0), 0)).toLocaleString('en-US', {maximumFractionDigits: 0})}</p>
+            <p className="text-xs text-slate-600 mt-2">All projects combined</p>
+          </div>
+          <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+            <p className="text-sm font-medium text-slate-500 mb-2">Pending Payments</p>
+            <p className="text-3xl font-bold text-orange-600">LKR {(projects.reduce((sum, p) => sum + (p.pendingAmount || 0), 0)).toLocaleString('en-US', {maximumFractionDigits: 0})}</p>
+            <p className="text-xs text-orange-600 mt-2">Total due</p>
+          </div>
+          <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+            <p className="text-sm font-medium text-slate-500 mb-2">In Progress</p>
+            <p className="text-3xl font-bold text-blue-600">{projects.filter(p => p.status === 'IN_PROGRESS').length}</p>
+            <p className="text-xs text-blue-600 mt-2">Active projects</p>
+          </div>
+        </div>
+
+        {/* Projects Table */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm text-slate-600">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-4 font-semibold text-slate-900">Project</th>
+                  <th className="px-6 py-4 font-semibold text-slate-900">Client</th>
+                  <th className="px-6 py-4 font-semibold text-slate-900">Budget</th>
+                  <th className="px-6 py-4 font-semibold text-slate-900">Status</th>
+                  <th className="px-6 py-4 font-semibold text-slate-900">Progress</th>
+                  <th className="px-6 py-4 font-semibold text-slate-900">Due Date</th>
+                  <th className="px-6 py-4 font-semibold text-slate-900">Pending</th>
+                  <th className="px-6 py-4 font-semibold text-slate-900">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {projects.map((project) => (
+                  <tr key={project.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4">
+                      <p className="font-medium text-slate-900">{project.name}</p>
+                      <p className="text-xs text-slate-500 mt-1 truncate max-w-xs">{project.description}</p>
+                    </td>
+                    <td className="px-6 py-4 text-slate-700">{project.clientName || 'N/A'}</td>
+                    <td className="px-6 py-4 font-mono text-sm font-semibold text-slate-900">LKR {Number(project.budget).toLocaleString('en-US', {maximumFractionDigits: 0})}</td>
+                    <td className="px-6 py-4">
+                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium border
+                        ${project.status === 'IN_PROGRESS' ? 'bg-blue-50 text-blue-700 border-blue-100' : 
+                          project.status === 'COMPLETED' ? 'bg-green-50 text-green-700 border-green-100' :
+                          project.status === 'PLANNING' ? 'bg-purple-50 text-purple-700 border-purple-100' :
+                          'bg-slate-100 text-slate-700 border-slate-200'}`}>
+                        {project.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        <div className="w-16 bg-slate-200 rounded-full h-2">
+                          <div className="bg-indigo-600 h-2 rounded-full" style={{width: `${project.progress || 0}%`}}></div>
+                        </div>
+                        <span className="text-xs font-medium text-slate-700">{project.progress || 0}%</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-slate-700">{new Date(project.endDate).toLocaleDateString()}</td>
+                    <td className="px-6 py-4 font-mono text-sm font-semibold">
+                      <span className="text-orange-600">LKR {Number(project.pendingAmount).toLocaleString('en-US', {maximumFractionDigits: 0})}</span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <button 
+                        onClick={() => setSelectedProject(project)}
+                        className="px-3 py-1 text-indigo-600 hover:bg-indigo-50 rounded-lg text-sm transition-colors border border-indigo-200"
+                      >
+                        View
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Project Creation Modal */}
+        {isProjectModalOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-slate-200">
+                <h2 className="text-2xl font-bold text-slate-900">Create New Project</h2>
+                <p className="text-sm text-slate-500 mt-1">Add a new project to track</p>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Project Name <span className="text-red-500">*</span></label>
+                  <input type="text" value={newProjectData.name} onChange={(e) => setNewProjectData({...newProjectData, name: e.target.value})} placeholder="Enter project name" className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Description</label>
+                  <textarea value={newProjectData.description} onChange={(e) => setNewProjectData({...newProjectData, description: e.target.value})} placeholder="Project description" rows={3} className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-none" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Client Name</label>
+                    <input type="text" value={newProjectData.clientName} onChange={(e) => setNewProjectData({...newProjectData, clientName: e.target.value})} placeholder="Client name" className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Budget <span className="text-red-500">*</span></label>
+                    <input type="number" value={newProjectData.budget} onChange={(e) => setNewProjectData({...newProjectData, budget: e.target.value})} placeholder="0" className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Start Date <span className="text-red-500">*</span></label>
+                    <input type="date" value={newProjectData.startDate} onChange={(e) => setNewProjectData({...newProjectData, startDate: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">End Date <span className="text-red-500">*</span></label>
+                    <input type="date" value={newProjectData.endDate} onChange={(e) => setNewProjectData({...newProjectData, endDate: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Team Lead</label>
+                    <select value={newProjectData.teamLeadId} onChange={(e) => setNewProjectData({...newProjectData, teamLeadId: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                      <option value="">Select team lead</option>
+                      {users.map(user => (<option key={user.id} value={user.id}>{user.name}</option>))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Priority</label>
+                    <select value={newProjectData.priority} onChange={(e) => setNewProjectData({...newProjectData, priority: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                      <option value="LOW">Low</option>
+                      <option value="MEDIUM">Medium</option>
+                      <option value="HIGH">High</option>
+                      <option value="CRITICAL">Critical</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-slate-200 flex gap-3 justify-end">
+                <button onClick={() => { setIsProjectModalOpen(false); setNewProjectData({ name: '', description: '', clientName: '', budget: '', startDate: '', endDate: '', teamLeadId: '', priority: 'MEDIUM' }); }} className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50">Cancel</button>
+                <button onClick={handleCreateProject} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700">Create Project</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const EmployeeList = () => {
     return (
       <div className="space-y-6">
@@ -1098,7 +1382,7 @@ const App: React.FC = () => {
             </button>
          </div>
          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {MOCK_USERS.map(user => (
+            {(users.length > 0 ? users : MOCK_USERS).map(user => (
               <div key={user.id} className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex flex-col gap-4">
                  <div className="flex items-start justify-between">
                     <div className="flex items-center gap-4">
@@ -1121,10 +1405,29 @@ const App: React.FC = () => {
                     </div>
                  </div>
                  <div className="flex gap-2">
-                    <button className="flex-1 px-3 py-2 text-sm font-medium text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200">
+                    <button 
+                      onClick={() => {
+                        setSelectedEmployeeForView(user);
+                        setIsEmployeeViewModalOpen(true);
+                      }}
+                      className="flex-1 px-3 py-2 text-sm font-medium text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
+                    >
                        View Logs
                     </button>
-                    <button className="px-3 py-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors border border-slate-200">
+                    <button 
+                      onClick={() => {
+                        setSelectedEmployeeForSettings(user);
+                        setEditingEmployeeData({
+                          name: user.name,
+                          email: user.email,
+                          mobile: user.mobile || '',
+                          department: user.department,
+                          role: user.role
+                        });
+                        setIsEmployeeSettingsModalOpen(true);
+                      }}
+                      className="px-3 py-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors border border-slate-200"
+                    >
                        <Settings className="w-4 h-4" />
                     </button>
                  </div>
@@ -1308,6 +1611,230 @@ const App: React.FC = () => {
              </div>
            </div>
          )}
+
+         {/* Employee View/Logs Modal */}
+         {isEmployeeViewModalOpen && selectedEmployeeForView && (
+           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+             <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+               <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                 <h2 className="text-2xl font-bold text-slate-900">Employee Details</h2>
+                 <button
+                   onClick={() => {
+                     setIsEmployeeViewModalOpen(false);
+                     setSelectedEmployeeForView(null);
+                   }}
+                   className="text-slate-400 hover:text-slate-600 text-2xl"
+                 >
+                   ×
+                 </button>
+               </div>
+
+               <div className="p-6 space-y-6">
+                 {/* Profile Section */}
+                 <div className="flex items-center gap-4 pb-6 border-b border-slate-200">
+                   <img src={selectedEmployeeForView.avatar} alt={selectedEmployeeForView.name} className="w-20 h-20 rounded-full border-2 border-indigo-100" />
+                   <div>
+                     <h3 className="text-xl font-bold text-slate-900">{selectedEmployeeForView.name}</h3>
+                     <p className="text-sm text-slate-500">{selectedEmployeeForView.email}</p>
+                     <div className="flex gap-2 mt-2">
+                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${selectedEmployeeForView.isOnline ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-700'}`}>
+                         {selectedEmployeeForView.isOnline ? '🟢 Online' : '⚫ Offline'}
+                       </span>
+                     </div>
+                   </div>
+                 </div>
+
+                 {/* Information Grid */}
+                 <div className="grid grid-cols-2 gap-4">
+                   <div>
+                     <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">Role</p>
+                     <p className="text-sm font-medium text-slate-700">{selectedEmployeeForView.role}</p>
+                   </div>
+                   <div>
+                     <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">Department</p>
+                     <p className="text-sm font-medium text-slate-700">{selectedEmployeeForView.department}</p>
+                   </div>
+                   <div>
+                     <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">Mobile</p>
+                     <p className="text-sm font-medium text-slate-700">{selectedEmployeeForView.mobile || 'N/A'}</p>
+                   </div>
+                   <div>
+                     <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">Today's Hours</p>
+                     <p className="text-sm font-medium text-slate-700">6h 30m</p>
+                   </div>
+                 </div>
+
+                 {/* Activity Logs */}
+                 <div className="pt-4 border-t border-slate-200">
+                   <h3 className="font-semibold text-slate-900 mb-4">Recent Activity</h3>
+                   <div className="space-y-3">
+                     <div className="flex gap-3 pb-3 border-b border-slate-100">
+                       <div className="w-2 h-2 rounded-full bg-green-500 mt-1.5"></div>
+                       <div>
+                         <p className="text-sm font-medium text-slate-700">Logged in</p>
+                         <p className="text-xs text-slate-400">Today at 9:00 AM</p>
+                       </div>
+                     </div>
+                     <div className="flex gap-3 pb-3 border-b border-slate-100">
+                       <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5"></div>
+                       <div>
+                         <p className="text-sm font-medium text-slate-700">Completed task</p>
+                         <p className="text-xs text-slate-400">Today at 2:30 PM</p>
+                       </div>
+                     </div>
+                     <div className="flex gap-3">
+                       <div className="w-2 h-2 rounded-full bg-purple-500 mt-1.5"></div>
+                       <div>
+                         <p className="text-sm font-medium text-slate-700">Status updated</p>
+                         <p className="text-xs text-slate-400">Today at 3:15 PM</p>
+                       </div>
+                     </div>
+                   </div>
+                 </div>
+               </div>
+
+               <div className="p-6 border-t border-slate-200 flex gap-3 justify-end">
+                 <button
+                   onClick={() => {
+                     setIsEmployeeViewModalOpen(false);
+                     setSelectedEmployeeForView(null);
+                   }}
+                   className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-medium hover:bg-slate-200 transition-colors"
+                 >
+                   Close
+                 </button>
+               </div>
+             </div>
+           </div>
+         )}
+
+         {/* Employee Settings Modal */}
+         {isEmployeeSettingsModalOpen && selectedEmployeeForSettings && (
+           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+             <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+               <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                 <h2 className="text-2xl font-bold text-slate-900">Employee Settings</h2>
+                 <button
+                   onClick={() => {
+                     setIsEmployeeSettingsModalOpen(false);
+                     setSelectedEmployeeForSettings(null);
+                   }}
+                   className="text-slate-400 hover:text-slate-600 text-2xl"
+                 >
+                   ×
+                 </button>
+               </div>
+
+               <div className="p-6 space-y-4">
+                 {/* Name */}
+                 <div>
+                   <label className="block text-sm font-medium text-slate-700 mb-2">
+                     Full Name
+                   </label>
+                   <input
+                     type="text"
+                     value={editingEmployeeData.name}
+                     onChange={(e) => setEditingEmployeeData({...editingEmployeeData, name: e.target.value})}
+                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                   />
+                 </div>
+
+                 {/* Email */}
+                 <div>
+                   <label className="block text-sm font-medium text-slate-700 mb-2">
+                     Email Address
+                   </label>
+                   <input
+                     type="email"
+                     value={editingEmployeeData.email}
+                     onChange={(e) => setEditingEmployeeData({...editingEmployeeData, email: e.target.value})}
+                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                   />
+                 </div>
+
+                 {/* Mobile */}
+                 <div>
+                   <label className="block text-sm font-medium text-slate-700 mb-2">
+                     Mobile Number
+                   </label>
+                   <input
+                     type="tel"
+                     value={editingEmployeeData.mobile}
+                     onChange={(e) => setEditingEmployeeData({...editingEmployeeData, mobile: e.target.value})}
+                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                   />
+                 </div>
+
+                 {/* Department & Role */}
+                 <div className="grid grid-cols-2 gap-4">
+                   <div>
+                     <label className="block text-sm font-medium text-slate-700 mb-2">
+                       Department
+                     </label>
+                     <input
+                       type="text"
+                       value={editingEmployeeData.department}
+                       onChange={(e) => setEditingEmployeeData({...editingEmployeeData, department: e.target.value})}
+                       className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                     />
+                   </div>
+                   <div>
+                     <label className="block text-sm font-medium text-slate-700 mb-2">
+                       Role
+                     </label>
+                     <select
+                       value={editingEmployeeData.role}
+                       onChange={(e) => setEditingEmployeeData({...editingEmployeeData, role: e.target.value})}
+                       className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                     >
+                       <option value="EMPLOYEE">Employee</option>
+                       <option value="TEAM_LEADER">Team Leader</option>
+                       <option value="ADMIN">Admin</option>
+                     </select>
+                   </div>
+                 </div>
+
+                 {/* Account Status */}
+                 <div className="pt-4 border-t border-slate-200">
+                   <h3 className="font-semibold text-slate-900 mb-4">Account Status</h3>
+                   <div className="space-y-3">
+                     <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                       <div>
+                         <p className="text-sm font-medium text-slate-700">Status</p>
+                         <p className="text-xs text-slate-500">User is currently {selectedEmployeeForSettings.isOnline ? 'online' : 'offline'}</p>
+                       </div>
+                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${selectedEmployeeForSettings.isOnline ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'}`}>
+                         {selectedEmployeeForSettings.isOnline ? 'Online' : 'Offline'}
+                       </span>
+                     </div>
+                   </div>
+                 </div>
+               </div>
+
+               <div className="p-6 border-t border-slate-200 flex gap-3 justify-end">
+                 <button
+                   onClick={() => {
+                     setIsEmployeeSettingsModalOpen(false);
+                     setSelectedEmployeeForSettings(null);
+                   }}
+                   className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+                 >
+                   Cancel
+                 </button>
+                 <button
+                   onClick={() => {
+                     alert('Employee settings updated successfully!');
+                     setIsEmployeeSettingsModalOpen(false);
+                     setSelectedEmployeeForSettings(null);
+                   }}
+                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors"
+                 >
+                   Save Changes
+                 </button>
+               </div>
+             </div>
+           </div>
+         )}
       </div>
     );
   };
@@ -1341,9 +1868,36 @@ const App: React.FC = () => {
                   className="pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-full text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all w-64"
                 />
              </div>
-             <button className="relative p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
-                <Bell className="w-5 h-5" />
-                <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
+             {currentUser?.role === UserRole.ADMIN && (
+                <button 
+                   onClick={() => setNotificationCenterOpen(true)}
+                   className="relative p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                   <Bell className="w-5 h-5" />
+                   <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
+                </button>
+             )}
+             <button 
+                onClick={() => setSessionManagerOpen(true)}
+                className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+             >
+                <Lock className="w-4 h-4" />
+                <span className="text-sm font-medium hidden sm:inline">Sessions</span>
+             </button>
+             {currentUser?.role !== UserRole.ADMIN && (
+                <button
+                   onClick={() => setIsLeaveRequestModalOpen(true)}
+                   className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors"
+                >
+                   <Calendar className="w-4 h-4" />
+                   <span className="hidden sm:inline">Request Leave</span>
+                </button>
+             )}
+             <button 
+                onClick={handleLogout}
+                className="text-slate-600 hover:text-slate-900 text-sm font-medium"
+             >
+                Logout
              </button>
           </div>
         </header>
@@ -1368,7 +1922,61 @@ const App: React.FC = () => {
            <div className="max-w-7xl mx-auto">
               {activeTab === 'dashboard' && <Dashboard />}
               {activeTab === 'tasks' && <TaskList />}
+              {activeTab === 'projects' && <Projects />}
               {activeTab === 'employees' && <EmployeeList />}
+              {activeTab === 'leaves' && (
+                <div className="space-y-6">
+                  <div className="flex justify-between items-center">
+                    <h2 className="text-2xl font-bold text-slate-900">Leave Management</h2>
+                    {currentUser?.role !== UserRole.ADMIN && (
+                      <button
+                        onClick={() => setIsLeaveRequestModalOpen(true)}
+                        className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition"
+                      >
+                        Request Leave
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Calendar and Requests */}
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2">
+                      <LeaveCalendar
+                        token={localStorage.getItem('token') || ''}
+                        isAdmin={currentUser?.role === UserRole.ADMIN}
+                        userId={currentUser?.id as unknown as number}
+                      />
+                    </div>
+                    <div className="lg:col-span-1">
+                      <div className="bg-white rounded-lg shadow-lg p-6">
+                        <h3 className="text-lg font-semibold mb-4">Quick Stats</h3>
+                        <div className="space-y-4">
+                          <div className="p-4 bg-blue-50 rounded-lg">
+                            <p className="text-sm text-blue-600">Pending Requests</p>
+                            <p className="text-2xl font-bold text-blue-900">-</p>
+                          </div>
+                          <div className="p-4 bg-green-50 rounded-lg">
+                            <p className="text-sm text-green-600">Approved Leaves</p>
+                            <p className="text-2xl font-bold text-green-900">-</p>
+                          </div>
+                          <div className="p-4 bg-amber-50 rounded-lg">
+                            <p className="text-sm text-amber-600">Used Days (This Year)</p>
+                            <p className="text-2xl font-bold text-amber-900">-</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Requests List */}
+                  <LeaveRequestsList
+                    token={localStorage.getItem('token') || ''}
+                    isAdmin={currentUser?.role === UserRole.ADMIN}
+                    userId={currentUser?.id as unknown as number}
+                    onRefresh={() => setLeaveRefreshTrigger(prev => prev + 1)}
+                  />
+                </div>
+              )}
               {activeTab === 'timesheet' && (
                 <div className="flex flex-col items-center justify-center h-96 text-slate-400">
                   <Calendar className="w-16 h-16 mb-4 opacity-20" />
@@ -1883,6 +2491,34 @@ const App: React.FC = () => {
 
       {/* Chat Component - Always visible when logged in */}
       {currentUser && <Chat currentUser={currentUser} />}
+
+      {/* Notification Center - Admin Only */}
+      {currentUser?.role === UserRole.ADMIN && (
+        <NotificationCenter
+          isOpen={notificationCenterOpen}
+          onClose={() => setNotificationCenterOpen(false)}
+          token={localStorage.getItem('token') || ''}
+        />
+      )}
+
+      {/* Session Manager - All Users */}
+      {sessionManagerOpen && (
+        <SessionManager
+          token={localStorage.getItem('token') || ''}
+          onClose={() => setSessionManagerOpen(false)}
+        />
+      )}
+
+      {/* Leave Request Modal */}
+      <LeaveRequestModal
+        isOpen={isLeaveRequestModalOpen}
+        onClose={() => setIsLeaveRequestModalOpen(false)}
+        token={localStorage.getItem('token') || ''}
+        onSuccess={() => {
+          setIsLeaveRequestModalOpen(false);
+          setLeaveRefreshTrigger(prev => prev + 1);
+        }}
+      />
     </div>
   );
 };

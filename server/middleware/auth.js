@@ -1,8 +1,9 @@
 const jwt = require('jsonwebtoken');
+const { ActiveSession } = require('../models');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
 
@@ -17,6 +18,27 @@ const authenticate = (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+
+    // Check if session is still active
+    const session = await ActiveSession.findOne({
+      where: {
+        token,
+        userId: decoded.userId,
+        status: 'ACTIVE'
+      }
+    });
+
+    if (!session) {
+      return res.status(401).json({
+        success: false,
+        message: 'Session has been invalidated. You have been logged out.',
+        sessionInvalidated: true
+      });
+    }
+
+    // Update last activity time
+    await session.update({ lastActivityTime: new Date() });
+
     req.user = decoded;
     next();
   } catch (error) {

@@ -7,7 +7,8 @@ import {
   BarChart2, 
   Settings, 
   LogOut,
-  Briefcase
+  Briefcase,
+  Calendar
 } from 'lucide-react';
 import { User, UserRole } from '../types';
 
@@ -26,6 +27,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onNavigate, o
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'tasks', label: 'My Tasks', icon: CheckSquare },
     { id: 'timesheet', label: 'Timesheet', icon: Clock },
+    { id: 'leaves', label: 'Leaves', icon: Calendar },
+    ...(isAdmin ? [{ id: 'projects', label: 'Projects', icon: Briefcase }] : []),
     ...(isAdmin ? [{ id: 'employees', label: 'Employees', icon: Users }] : []),
     { id: 'reports', label: 'Reports', icon: BarChart2 },
     { id: 'settings', label: 'Settings', icon: Settings },

@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS `tasks` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `title` VARCHAR(255) NOT NULL,
   `description` TEXT,
-  `status` ENUM('TODO', 'IN_PROGRESS', 'COMPLETED') DEFAULT 'TODO',
+  `status` ENUM('TODO', 'IN_PROGRESS', 'REVIEW', 'COMPLETED') DEFAULT 'TODO',
   `priority` ENUM('LOW', 'MEDIUM', 'HIGH', 'URGENT') DEFAULT 'MEDIUM',
   `assigneeId` INT NOT NULL,
   `createdBy` INT NOT NULL,

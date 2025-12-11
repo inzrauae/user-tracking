@@ -7,7 +7,7 @@ const { authenticate } = require('../middleware/auth');
 router.get('/', authenticate, async (req, res) => {
   try {
     const users = await User.findAll({
-      attributes: { exclude: ['password'] }
+      attributes: { exclude: ['password', 'resetPasswordToken', 'resetPasswordExpires'] }
     });
     res.json({ success: true, users });
   } catch (error) {
@@ -19,7 +19,7 @@ router.get('/', authenticate, async (req, res) => {
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const user = await User.findByPk(req.params.id, {
-      attributes: { exclude: ['password'] }
+      attributes: { exclude: ['password', 'resetPasswordToken', 'resetPasswordExpires'] }
     });
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });

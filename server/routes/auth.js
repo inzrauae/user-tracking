@@ -3,12 +3,14 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { User } = require('../models');
+const { User, ActiveSession, LoginAttempt, Notification } = require('../models');
+const { authenticate, isAdmin } = require('../middleware/auth');
+const { generateDeviceFingerprint, parseUserAgent, getClientIp, isMobileDevice } = require('../utils/deviceUtils');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
-// Register
-router.post('/register', async (req, res) => {
+// Register (Admin only - for creating employees)
+router.post('/register', authenticate, isAdmin, async (req, res) => {
   try {
     const { name, email, password, role, department, mobile, bankAccountNumber, bankName, ifscCode } = req.body;
 
@@ -48,7 +50,8 @@ router.post('/register', async (req, res) => {
         role: user.role,
         department: user.department,
         avatar: user.avatar,
-        mobile: user.mobile
+        mobile: user.mobile,
+        isOnline: user.isOnline
       }
     });
   } catch (error) {
@@ -56,33 +59,187 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// Login
+// Login with session management
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+    const userAgent = req.headers['user-agent'] || '';
+    const ipAddress = getClientIp(req);
+    const isMobile = isMobileDevice(userAgent);
+    const deviceInfo = parseUserAgent(userAgent);
+    const deviceId = generateDeviceFingerprint(userAgent, ipAddress);
 
     // Find user
     const user = await User.findOne({ where: { email } });
     if (!user) {
+      // Log failed attempt
+      await LoginAttempt.create({
+        email,
+        deviceId,
+        ipAddress,
+        success: false,
+        reason: 'User not found',
+        userAgent,
+        isMobile
+      });
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     // Check password
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
+      // Log failed attempt
+      await LoginAttempt.create({
+        userId: user.id,
+        email,
+        deviceId,
+        ipAddress,
+        success: false,
+        reason: 'Invalid password',
+        userAgent,
+        isMobile
+      });
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
+
+    // Check if mobile login is restricted for this user
+    if (isMobile && user.role === 'EMPLOYEE') {
+      // Log attempt
+      await LoginAttempt.create({
+        userId: user.id,
+        email,
+        deviceId,
+        ipAddress,
+        success: false,
+        reason: 'Mobile login restricted',
+        userAgent,
+        isMobile
+      });
+
+      // Notify admin
+      const admins = await User.findAll({ where: { role: 'ADMIN' } });
+      for (const admin of admins) {
+        await Notification.create({
+          userId: admin.id,
+          type: 'MOBILE_LOGIN_RESTRICTED',
+          title: 'Mobile Login Attempt Blocked',
+          message: `Employee ${user.name} (${user.email}) attempted to login from a mobile device, which is restricted.`,
+          priority: 'HIGH',
+          actionRequired: true,
+          relatedData: {
+            employeeId: user.id,
+            employeeName: user.name,
+            deviceInfo: deviceInfo,
+            ipAddress: ipAddress
+          }
+        });
+      }
+
+      return res.status(403).json({
+        success: false,
+        message: 'Mobile login is restricted for employees. Please use a desktop or laptop.',
+        restricted: true
+      });
+    }
+
+    // Check for existing active sessions
+    const existingSessions = await ActiveSession.findAll({
+      where: {
+        userId: user.id,
+        status: 'ACTIVE'
+      }
+    });
+
+    if (existingSessions.length > 0) {
+      // Different device - invalidate previous session
+      const previousSession = existingSessions[0];
+      const isDifferentDevice = previousSession.deviceId !== deviceId;
+
+      if (isDifferentDevice) {
+        // Invalidate previous session
+        await previousSession.update({
+          status: 'INVALIDATED',
+          reason: `New login from ${deviceInfo.osName} - ${deviceInfo.browserName}`
+        });
+
+        // Notify admin about potential security issue
+        const admins = await User.findAll({ where: { role: 'ADMIN' } });
+        for (const admin of admins) {
+          await Notification.create({
+            userId: admin.id,
+            type: 'MULTIPLE_LOGIN_ATTEMPT',
+            title: 'Employee Multi-Device Login Detected',
+            message: `Employee ${user.name} (${user.email}) logged in from a different device. Previous session has been invalidated.`,
+            priority: 'MEDIUM',
+            actionRequired: true,
+            relatedData: {
+              employeeId: user.id,
+              employeeName: user.name,
+              previousDevice: {
+                osName: previousSession.osName,
+                browserName: previousSession.browserName,
+                ipAddress: previousSession.ipAddress
+              },
+              newDevice: {
+                osName: deviceInfo.osName,
+                browserName: deviceInfo.browserName,
+                ipAddress: ipAddress
+              }
+            }
+          });
+        }
+
+        // Log the login attempt
+        await LoginAttempt.create({
+          userId: user.id,
+          email,
+          deviceId,
+          ipAddress,
+          success: true,
+          reason: 'Multi-device login detected and previous session invalidated',
+          userAgent,
+          isMobile
+        });
+      }
+    }
+
+    // Generate token
+    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+
+    // Create new session record
+    const session = await ActiveSession.create({
+      userId: user.id,
+      token,
+      deviceId,
+      deviceName: deviceInfo.deviceName,
+      browserName: deviceInfo.browserName,
+      osName: deviceInfo.osName,
+      ipAddress,
+      isMobile: deviceInfo.isMobile,
+      isTablet: deviceInfo.isTablet,
+      status: 'ACTIVE',
+      loginTime: new Date()
+    });
 
     // Update online status
     await user.update({ isOnline: true, lastActivity: new Date() });
 
-    // Generate token
-    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    // Log successful login
+    await LoginAttempt.create({
+      userId: user.id,
+      email,
+      deviceId,
+      ipAddress,
+      success: true,
+      userAgent,
+      isMobile
+    });
 
     res.json({
       success: true,
       message: 'Login successful',
       token,
+      sessionId: session.id,
       user: {
         id: user.id,
         name: user.name,
@@ -90,10 +247,18 @@ router.post('/login', async (req, res) => {
         role: user.role,
         department: user.department,
         avatar: user.avatar,
-        isOnline: user.isOnline
+        isOnline: user.isOnline,
+        mobile: user.mobile
+      },
+      sessionInfo: {
+        deviceName: deviceInfo.deviceName,
+        osName: deviceInfo.osName,
+        browserName: deviceInfo.browserName,
+        loginTime: session.loginTime
       }
     });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ success: false, message: 'Login failed', error: error.message });
   }
 });
@@ -243,6 +408,103 @@ router.post('/login', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Login failed', error: error.message });
+  }
+});
+
+// Logout - Invalidate session
+router.post('/logout', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const token = req.headers.authorization?.split(' ')[1];
+
+    if (token) {
+      // Find and invalidate the session
+      const session = await ActiveSession.findOne({
+        where: {
+          userId,
+          token,
+          status: 'ACTIVE'
+        }
+      });
+
+      if (session) {
+        await session.update({
+          status: 'EXPIRED',
+          reason: 'User logged out'
+        });
+      }
+    }
+
+    // Update user online status
+    const user = await User.findByPk(userId);
+    if (user) {
+      await user.update({ isOnline: false });
+    }
+
+    res.json({ success: true, message: 'Logged out successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Logout failed', error: error.message });
+  }
+});
+
+// Get active sessions for user
+router.get('/sessions', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const sessions = await ActiveSession.findAll({
+      where: {
+        userId,
+        status: 'ACTIVE'
+      },
+      order: [['loginTime', 'DESC']]
+    });
+
+    res.json({
+      success: true,
+      sessions: sessions.map(session => ({
+        id: session.id,
+        deviceName: session.deviceName,
+        osName: session.osName,
+        browserName: session.browserName,
+        ipAddress: session.ipAddress,
+        isMobile: session.isMobile,
+        loginTime: session.loginTime,
+        lastActivityTime: session.lastActivityTime,
+        isCurrent: req.headers.authorization?.split(' ')[1] === session.token
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to fetch sessions', error: error.message });
+  }
+});
+
+// Logout from specific device
+router.post('/logout-device/:sessionId', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const sessionId = req.params.sessionId;
+
+    const session = await ActiveSession.findOne({
+      where: {
+        id: sessionId,
+        userId,
+        status: 'ACTIVE'
+      }
+    });
+
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+
+    await session.update({
+      status: 'EXPIRED',
+      reason: 'User logged out from this device'
+    });
+
+    res.json({ success: true, message: 'Logged out from device successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to logout from device', error: error.message });
   }
 });
 
