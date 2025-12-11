@@ -1,21 +1,24 @@
-const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
-const User = require('./models/User');
-const Task = require('./models/Task');
-
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/user-tracking';
+const { sequelize, testConnection } = require('./config/database');
+// Load all models and associations so sequelize knows about every model (including ActiveSession)
+const models = require('./models');
+const { User, Task } = models;
 
 const seedDatabase = async () => {
   try {
-    await mongoose.connect(MONGODB_URI);
-    console.log('✅ Connected to MongoDB');
+    const ok = await testConnection();
+    if (!ok) {
+      console.error('❌ Aborting seed: cannot connect to MySQL');
+      process.exit(1);
+    }
 
-    // Clear existing data
-    await User.deleteMany({});
-    await Task.deleteMany({});
-    console.log('🗑️  Cleared existing data');
+    // Recreate tables. Temporarily disable foreign key checks to avoid drop errors.
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
+    await sequelize.sync({ force: true });
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
+    console.log('🗄️  Database schema synced (tables recreated)');
 
     // Create demo users
     const hashedPassword = await bcrypt.hash('demo123', 10);
@@ -59,7 +62,7 @@ const seedDatabase = async () => {
       }
     ];
 
-    const createdUsers = await User.insertMany(users);
+    const createdUsers = await User.bulkCreate(users, { returning: true });
     console.log(`✅ Created ${createdUsers.length} demo users`);
 
     // Create demo tasks
@@ -69,8 +72,8 @@ const seedDatabase = async () => {
         description: 'Create mockups for the new product landing page',
         status: 'IN_PROGRESS',
         priority: 'HIGH',
-        assigneeId: createdUsers[1]._id,
-        createdBy: createdUsers[0]._id,
+        assigneeId: createdUsers[1].id,
+        createdBy: createdUsers[0].id,
         dueDate: '2025-12-10'
       },
       {
@@ -78,8 +81,8 @@ const seedDatabase = async () => {
         description: 'Users reporting issues with login on mobile devices',
         status: 'TODO',
         priority: 'URGENT',
-        assigneeId: createdUsers[1]._id,
-        createdBy: createdUsers[0]._id,
+        assigneeId: createdUsers[1].id,
+        createdBy: createdUsers[0].id,
         dueDate: '2025-12-08'
       },
       {
@@ -87,8 +90,8 @@ const seedDatabase = async () => {
         description: 'Add API documentation for new endpoints',
         status: 'COMPLETED',
         priority: 'MEDIUM',
-        assigneeId: createdUsers[3]._id,
-        createdBy: createdUsers[0]._id,
+        assigneeId: createdUsers[3].id,
+        createdBy: createdUsers[0].id,
         dueDate: '2025-12-05'
       },
       {
@@ -96,8 +99,8 @@ const seedDatabase = async () => {
         description: 'Optimize queries for better performance',
         status: 'TODO',
         priority: 'MEDIUM',
-        assigneeId: createdUsers[3]._id,
-        createdBy: createdUsers[0]._id,
+        assigneeId: createdUsers[3].id,
+        createdBy: createdUsers[0].id,
         dueDate: '2025-12-15'
       },
       {
@@ -105,13 +108,13 @@ const seedDatabase = async () => {
         description: 'Conduct user testing for new features',
         status: 'IN_PROGRESS',
         priority: 'HIGH',
-        assigneeId: createdUsers[2]._id,
-        createdBy: createdUsers[0]._id,
+        assigneeId: createdUsers[2].id,
+        createdBy: createdUsers[0].id,
         dueDate: '2025-12-12'
       }
     ];
 
-    const createdTasks = await Task.insertMany(tasks);
+    const createdTasks = await Task.bulkCreate(tasks);
     console.log(`✅ Created ${createdTasks.length} demo tasks`);
 
     console.log('\n📊 Demo Data Summary:');
@@ -123,10 +126,10 @@ const seedDatabase = async () => {
     console.log('\nPassword for all users: demo123');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
-    await mongoose.disconnect();
-    console.log('✅ Disconnected from MongoDB');
+    await sequelize.close();
+    console.log('✅ Disconnected from MySQL');
     console.log('🎉 Database seeded successfully!');
-    
+    process.exit(0);
   } catch (error) {
     console.error('❌ Error seeding database:', error);
     process.exit(1);
